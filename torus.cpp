@@ -8,12 +8,14 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+// params to set
 const float MAJOR_RADIUS = 0.6; // radius of torus
 const float MINOR_RADIUS = 0.2; // radius of inner tube
-const float MAX_X_Y = MAJOR_RADIUS + MINOR_RADIUS;
 const float THETA = 0.1; // radians rotation
-const int NUM_POINTS = 100; // number of points in torus mesh
-const std::string SYMBOLS[4] = {"█", "▓", "▒", "░"};
+const int NUM_POINTS = 500; // number of points in torus mesh
+const std::string SYMBOLS[4] = {"░", "▒", "▓", "█"};
+
+const float MAX_X_Y = MAJOR_RADIUS + MINOR_RADIUS;
 
 // rotation matrices, i think we only need the composition of all 3
 const float S = std::sin(static_cast<float>(THETA));
@@ -103,21 +105,66 @@ std::vector<Point> init_mesh() {
   return points;
 }
 
-void render_point(const Point &p){
+void render_point(const Point &p, int term_rows, int term_cols){
+  float x = convert_range(p.x, -MAX_X_Y, MAX_X_Y, 0, static_cast<int>(term_cols));
+  float y = convert_range(p.y, -MAX_X_Y, MAX_X_Y, 0, static_cast<int>(term_rows));
+  int term_x = std::floor(x);
+  int term_y = std::floor(y);
+  print_at_pos(term_y, term_x, '%');
 }
 
-void render_mesh(const std::vector<Point> &points) {
+void render_mesh(const std::vector<Point> &points, int term_rows, int term_cols) {
+  // Back buffer: one string per cell (because SYMBOLS are UTF-8, not single bytes)
+  std::vector<std::string> screen(term_rows * term_cols, " ");
+  std::vector<float> depth(term_rows * term_cols, -1e9f); // very far back
 
+  for (const Point &p : points) {
+    // Project 3D point -> 2D terminal coordinates
+    float sx = convert_range(p.x, -MAX_X_Y, MAX_X_Y, 0.0f, term_cols - 1.0f);
+    float sy = convert_range(p.y, -MAX_X_Y, MAX_X_Y, 0.0f, term_rows - 1.0f);
+
+    int col = static_cast<int>(std::floor(sx));
+    int row = static_cast<int>(std::floor(sy));
+
+    if (col < 0 || col >= term_cols || row < 0 || row >= term_rows) {
+      continue;
+    }
+
+    int idx = row * term_cols + col;
+
+    // Simple depth test: larger z = closer to camera
+    if (p.z > depth[idx]) {
+      depth[idx] = p.z;
+
+      // Map z in [-MAX_X_Y, MAX_X_Y] -> {0,1,2,3}
+      float norm = (p.z + MAX_X_Y) / (2.0f * MAX_X_Y); // 0..1
+      int shade = static_cast<int>(norm * 4.0f);
+      if (shade < 0) shade = 0;
+      if (shade > 3) shade = 3;
+
+      screen[idx] = SYMBOLS[shade];
+    }
+  }
+
+  // Draw frame in one go
+  std::cout << "\033[H";  // cursor home (no need to full clear every frame)
+  for (int r = 0; r < term_rows; ++r) {
+    for (int c = 0; c < term_cols; ++c) {
+      std::cout << screen[r * term_cols + c];
+    }
+    std::cout << '\n';
+  }
+  std::cout.flush();
 }
 
 int main() {
-  struct winsize w;
+  struct winsize w{};
   ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
   std::vector<Point> points = init_mesh();
   while (true) {
     rotate_mesh(points);
     std::sort(points.begin(), points.end(), order_points);
+    render_mesh(points, w.ws_row, w.ws_col);
   }
   return 0;
-  
 }
